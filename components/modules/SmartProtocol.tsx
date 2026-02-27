@@ -7,6 +7,7 @@ import { ProtocolMetadata, ProtocolType, DialogSegment, AppLanguage, ProtocolLan
 import { useToast } from "../../contexts/ToastContext";
 import { useLanguage } from "../../contexts/LanguageContext";
 import { generateLegalProtocol, transcribeAudio, latinUzbekToCyrillic } from "../../services/geminiService";
+import { saveSoroqAudio, getSoroqAudio, clearSoroqAudio, type SavedSoroqAudio } from "../../services/soroqAudioStorage";
 import { PROTOCOL_TEMPLATES, type ProtocolTemplateEntry } from "../../config/protocolTemplates";
 
 /** Safe template getter */
@@ -161,6 +162,7 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [savedAudio, setSavedAudio] = useState<SavedSoroqAudio | null>(null);
   const [transcriptText, setTranscriptText] = useState("");
 
   // --- REAL-TIME SPEECH-TO-TEXT (display only; does not affect recording or bayonnoma) ---
@@ -175,6 +177,7 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recordingTimeRef = useRef(0);
   const speechRecognitionRef = useRef<InstanceType<Window["SpeechRecognition"]> | null>(null);
   const liveTranscriptEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -217,8 +220,25 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   }, [stopEverything]);
 
   useEffect(() => {
+    getSoroqAudio().then(setSavedAudio).catch(() => setSavedAudio(null));
+  }, []);
+
+  useEffect(() => {
     liveTranscriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [liveTranscript, interimTranscript]);
+
+  const loadSavedAudio = useCallback(() => {
+    if (savedAudio) {
+      setAudioBlob(savedAudio.blob);
+      toast("Сақланган овоз юкланди. Баённома яратиш тугмасини босинг.", "success");
+    }
+  }, [savedAudio, toast]);
+
+  const removeSavedAudio = useCallback(async () => {
+    await clearSoroqAudio();
+    setSavedAudio(null);
+    toast("Сақланган овоз ўчирилди", "info");
+  }, [toast]);
 
   const startRecording = useCallback(async () => {
     try {
@@ -252,7 +272,7 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : "audio/webm";
-      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 192000 });
+      const recorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 128000 });
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (e) => {
@@ -265,6 +285,7 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         setAudioBlob(blob);
         audioChunksRef.current = [];
+        saveSoroqAudio(blob, mimeType, recordingTimeRef.current).catch(() => {});
       };
 
       recorder.start(1000); // Collect data every second
@@ -321,10 +342,11 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         }
       }
 
-      // Start timer
       setRecordingTime(0);
+      recordingTimeRef.current = 0;
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => prev + 1);
+        recordingTimeRef.current += 1;
       }, 1000);
 
       setIsRecording(true);
@@ -559,6 +581,21 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         {/* CENTER: RECORDING AREA */}
         <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 to-slate-100 relative">
           <div className="flex-1 flex flex-col items-center justify-center p-10">
+            {savedAudio && !audioBlob && !isRecording && (
+              <div className="w-full max-w-2xl mb-4 p-4 rounded-xl border border-blue-200 bg-blue-50/80 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-bold text-slate-800">
+                  Сақланган сўроқ овози мавжуд. Баённома яратишда хатолик бўлса, шу овоздан қайта урининг.
+                </p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={loadSavedAudio} className="px-4 py-2 bg-uzblue text-white rounded-lg text-xs font-bold hover:bg-blue-600">
+                    Ишлатиш
+                  </button>
+                  <button type="button" onClick={removeSavedAudio} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-300">
+                    Ўчириш
+                  </button>
+                </div>
+              </div>
+            )}
             {/* Real-time speech-to-text (display only; does not affect recording or bayonnoma) */}
             <div className="w-full max-w-2xl mb-6">
               <div className="rounded-2xl border border-slate-200 bg-white/95 shadow-lg shadow-slate-200/50 overflow-hidden">

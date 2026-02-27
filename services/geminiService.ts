@@ -1140,10 +1140,96 @@ export async function transcribeAudioFile(
   }];
 }
 
+/** Max size for single request (~18 MB) to avoid API limits; above this we chunk. */
+const LONG_AUDIO_THRESHOLD_BYTES = 18 * 1024 * 1024;
+/** Chunk duration in seconds for long audio (2 min so each chunk stays under ~15 MB at 48 kHz). */
+const LONG_AUDIO_CHUNK_SECONDS = 2 * 60;
+
+/**
+ * Splits an AudioBuffer into chunks of up to chunkDurationSeconds and returns WAV Files.
+ */
+async function splitAudioToWavChunks(
+  buffer: AudioBuffer,
+  chunkDurationSeconds: number,
+): Promise<File[]> {
+  const sr = buffer.sampleRate;
+  const totalSamples = buffer.length;
+  const durationSec = totalSamples / sr;
+  const files: File[] = [];
+  const ctx = new AudioContext({ sampleRate: sr });
+
+  try {
+    for (let startSec = 0; startSec < durationSec; startSec += chunkDurationSeconds) {
+      const endSec = Math.min(startSec + chunkDurationSeconds, durationSec);
+      const startSample = Math.floor(startSec * sr);
+      const endSample = Math.floor(endSec * sr);
+      const chunkLength = endSample - startSample;
+      if (chunkLength <= 0) continue;
+
+      const chunkBuffer = ctx.createBuffer(buffer.numberOfChannels, chunkLength, sr);
+      for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+        chunkBuffer.copyToChannel(buffer.getChannelData(ch).subarray(startSample, endSample), ch);
+      }
+      const wavAb = audioBufferToWav(chunkBuffer);
+      files.push(new File([wavAb], `chunk_${files.length}.wav`, { type: "audio/wav" }));
+    }
+  } finally {
+    await ctx.close();
+  }
+  return files;
+}
+
+/**
+ * Transcribes long audio by splitting into chunks, transcribing each, then merging segments.
+ */
+async function transcribeLongAudio(
+  file: File,
+  lang: AppLanguage,
+  apiKey: string,
+): Promise<TranscriptSegment[]> {
+  const raw = await file.arrayBuffer();
+  const ctx = new AudioContext({ sampleRate: 16000 });
+  let decoded: AudioBuffer;
+  try {
+    decoded = await ctx.decodeAudioData(raw);
+  } finally {
+    await ctx.close();
+  }
+
+  const chunks = await splitAudioToWavChunks(decoded, LONG_AUDIO_CHUNK_SECONDS);
+  const allSegments: TranscriptSegment[] = [];
+  let timeOffsetSec = 0;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const segs = await transcribeWithOpenRouter(chunks[i], lang, apiKey);
+    for (const s of segs) {
+      const ts = s.timestamp ? parseTimestampToSeconds(s.timestamp) : 0;
+      allSegments.push({
+        ...s,
+        id: `seg_${allSegments.length + 1}`,
+        timestamp: formatTimestamp(timeOffsetSec + ts),
+      });
+    }
+    timeOffsetSec += LONG_AUDIO_CHUNK_SECONDS;
+  }
+
+  return allSegments;
+}
+
+function parseTimestampToSeconds(mmss: string): number {
+  const parts = mmss.trim().split(":");
+  if (parts.length >= 2) {
+    const m = parseInt(parts[0], 10) || 0;
+    const s = parseInt(parts[1], 10) || 0;
+    return m * 60 + s;
+  }
+  return 0;
+}
+
 /**
  * Transcribes audio from base64 for the SmartProtocol interrogation module.
- * Primary: OpenRouter + Gemini (excellent Uzbek Cyrillic understanding).
- * Fallback: Groq Whisper (fast but weaker Uzbek support).
+ * For long recordings (>18 MB), chunks into 6-min segments to stay under API limits.
+ * Primary: OpenRouter + Gemini. Fallback: Groq Whisper.
  */
 export async function transcribeAudio(
   base64: string,
@@ -1156,19 +1242,54 @@ export async function transcribeAudio(
   const { ext } = normalizeAudioMimeType(mimeType);
   const audioFile = base64ToFile(base64, `audio/${ext}`, `audio.${ext}`);
 
-  // Primary: OpenRouter + Gemini — best Uzbek Cyrillic comprehension
+  const useChunked = audioFile.size > LONG_AUDIO_THRESHOLD_BYTES;
+
   if (OPENROUTER_API_KEY) {
     try {
-      const segments = await transcribeWithOpenRouter(audioFile, lang, OPENROUTER_API_KEY);
-      if (segments.length > 0) return segments;
+      if (useChunked) {
+        const segments = await transcribeLongAudio(audioFile, lang, OPENROUTER_API_KEY);
+        if (segments.length > 0) return segments;
+      } else {
+        const segments = await transcribeWithOpenRouter(audioFile, lang, OPENROUTER_API_KEY);
+        if (segments.length > 0) return segments;
+      }
     } catch (e) {
       console.warn("OpenRouter transcription failed, falling back to Groq:", e);
     }
   }
 
-  // Fallback: Groq Whisper
   if (!GROQ_API_KEY) {
     throw new Error("Аудио транскрипция учун API калит топилмади (OpenRouter ёки Groq).");
+  }
+
+  if (useChunked) {
+    const raw = await audioFile.arrayBuffer();
+    const ctx = new AudioContext({ sampleRate: 16000 });
+    let decoded: AudioBuffer;
+    try {
+      decoded = await ctx.decodeAudioData(raw);
+    } finally {
+      await ctx.close();
+    }
+    const chunks = await splitAudioToWavChunks(decoded, LONG_AUDIO_CHUNK_SECONDS);
+    const allSegments: TranscriptSegment[] = [];
+    for (const chunk of chunks) {
+      const formData = new FormData();
+      formData.append("file", chunk, chunk.name);
+      formData.append("model", AUDIO_MODEL);
+      formData.append("language", getLangCode(lang));
+      formData.append("response_format", "verbose_json");
+      formData.append("prompt", "Тергов сўроқ ёзуви. Ўзбек кирилл.");
+      const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${GROQ_API_KEY}` },
+        body: formData,
+      });
+      if (!res.ok) throw new Error(`Groq ${res.status}: ${await res.text()}`);
+      const parsed = parseGroqTranscription(await res.json() as unknown);
+      parsed.forEach((s, i) => allSegments.push({ ...s, id: `seg_${allSegments.length + 1}` }));
+    }
+    return allSegments;
   }
 
   const formData = new FormData();

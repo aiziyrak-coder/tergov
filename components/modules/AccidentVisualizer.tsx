@@ -100,8 +100,6 @@ const AccidentVisualizer: React.FC<ForensicVisualizerProps> = ({ onBack }) => {
                   mimeType = getMimeTypeFromExtension(processFile.name, 'image/jpeg');
               }
               
-              console.log(`File loaded: ${processFile.name}, Type: ${mimeType}`);
-              
               setFiles(prev => [...prev, { name: processFile.name, base64, mimeType }]);
           };
           reader.readAsDataURL(processFile);

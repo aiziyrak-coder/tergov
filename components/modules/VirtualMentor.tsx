@@ -186,19 +186,20 @@ const VirtualMentor: React.FC<VirtualMentorProps> = ({ onBack, onOpenTemplates }
           if (recognitionRef.current) recognitionRef.current.stop();
           setIsListening(false);
       } else {
-          // @ts-ignore
-          const SpeechRecognition = window.webkitSpeechRecognition || window.SpeechRecognition;
-          if (!SpeechRecognition) return toast("Микрофон қўллаб-қувватланмайди", "error");
-          
-          const recognition = new SpeechRecognition();
+          const win = typeof window !== "undefined" ? (window as unknown) as { SpeechRecognition?: new () => { start(): void; stop(): void; continuous: boolean; interimResults: boolean; lang: string; onstart: () => void; onresult: (e: unknown) => void; onend: () => void; onerror: (e?: unknown) => void }; webkitSpeechRecognition?: new () => { start(): void; stop(): void; continuous: boolean; interimResults: boolean; lang: string; onstart: () => void; onresult: (e: unknown) => void; onend: () => void; onerror: (e?: unknown) => void } } : null;
+          const SpeechRecognitionCtor = win?.SpeechRecognition ?? win?.webkitSpeechRecognition;
+          if (!SpeechRecognitionCtor) return toast("Микрофон қўллаб-қувватланмайди", "error");
+
+          const recognition = new SpeechRecognitionCtor();
           recognition.continuous = false;
           recognition.interimResults = false;
-          recognition.lang = 'uz-UZ';
-          
+          recognition.lang = "uz-UZ";
+
           recognition.onstart = () => setIsListening(true);
-          
-          recognition.onresult = (event: any) => {
-              const text = event.results[0][0].transcript;
+
+          recognition.onresult = (event: unknown) => {
+              const e = event as { results: { [i: number]: { [j: number]: { transcript: string } } } };
+              const text = e.results[0]?.[0]?.transcript ?? "";
               setInput(text);
               handleSend(text); // Auto send on voice end
           };

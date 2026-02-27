@@ -164,7 +164,7 @@ ${getParticipantsHTML(data.participants)}
 </div>
 `;
 
-const getShablonGuvoh = (data: any) => `
+const getShablonGuvoh = (data: TemplateFormData) => `
 <h1>ГУВОҲНИ СЎРОҚ ҚИЛИШ БАЁННОМАСИ</h1>
 
 <div style="display: flex; justify-content: space-between;">
@@ -178,7 +178,7 @@ const getShablonGuvoh = (data: any) => `
 </p>
 
 <table border="1">
-    <tr><td><strong>1. Фамилияси, исми, шарифи:</strong></td><td>${data.participants.find((p:any) => p.role.includes('Гувоҳ'))?.name || '________________________________________'}</td></tr>
+    <tr><td><strong>1. Фамилияси, исми, шарифи:</strong></td><td>${data.participants.find((p: Participant) => p.role.includes("Гувоҳ"))?.name ?? "________________________________________"}</td></tr>
     <tr><td><strong>2. Туғилган йили ва жойи:</strong></td><td>________________________________________</td></tr>
     <tr><td><strong>3. Миллати:</strong></td><td>________________________________________</td></tr>
     <tr><td><strong>4. Маълумоти:</strong></td><td>________________________________________</td></tr>

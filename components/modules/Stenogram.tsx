@@ -125,12 +125,9 @@ const Stenogram: React.FC<StenogramProps> = ({ onBack }) => {
 
   // --- SPEAKER MANAGEMENT FUNCTIONS ---
 
-  // 1. Rename a speaker globally (sidebar input)
+  // 1. Rename a speaker globally (sidebar input) — allow empty so user can clear and type new name
   const handleGlobalRename = (oldName: string, newName: string) => {
-      if (!newName.trim()) return;
-      // Update the list itself
       setAllSpeakers(prev => prev.map(s => s === oldName ? newName : s));
-      // Update all segments using this speaker name
       setSegments(prev => prev.map(s => s.speaker === oldName ? { ...s, speaker: newName } : s));
   };
 
@@ -162,13 +159,17 @@ const Stenogram: React.FC<StenogramProps> = ({ onBack }) => {
   }, [deleteSegmentId, toast]);
 
   // --- WORD GENERATION (official stenogram format) ---
+  /** Remove leading MM:SS or M:SS timestamp from segment text so only one timestamp shows (at line start). */
+  const stripLeadingTimestamp = (text: string): string => text.replace(/^\s*\d{1,2}:\d{2}\s+/, "").trim();
+
   const downloadWordDocument = () => {
       const dialoguesHtml = segments.map(s => {
           const timeTag = s.timestamp
               ? `<span style="color:#6b7280;font-size:10pt;font-family:'Courier New',monospace;">[${escapeHtml(s.timestamp)}]</span> `
-              : '';
-          return `<p style="margin-bottom: 6px;">${timeTag}<strong>${escapeHtml(s.speaker)}:</strong> ${escapeHtml(s.text)}</p>`;
-      }).join('');
+              : "";
+          const textOnly = stripLeadingTimestamp(s.text ?? "");
+          return `<p style="margin-bottom: 6px;">${timeTag}<strong>${escapeHtml(s.speaker)}:</strong> ${escapeHtml(textOnly)}</p>`;
+      }).join("");
 
       const templateHtml = `
         <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
