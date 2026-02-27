@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   ArrowLeft, Save, StopCircle, Play, FileText, Radio, Gavel,
-  Brain, Lightbulb, Loader2, Mic, MicOff, Clock,
+  Brain, Lightbulb, Loader2, Mic, MicOff, Clock, Trash2,
 } from "lucide-react";
 import { ProtocolMetadata, ProtocolType, DialogSegment, AppLanguage, ProtocolLanguage } from "../../types";
 import { useToast } from "../../contexts/ToastContext";
 import { useLanguage } from "../../contexts/LanguageContext";
 import { generateLegalProtocol, transcribeAudio, latinUzbekToCyrillic } from "../../services/geminiService";
-import { saveSoroqAudio, getSoroqAudio, clearSoroqAudio, type SavedSoroqAudio } from "../../services/soroqAudioStorage";
+import { saveSoroqAudio, getSoroqAudioList, getSoroqAudioById, deleteSoroqAudio, type SavedSoroqAudioItem } from "../../services/soroqAudioStorage";
 import { PROTOCOL_TEMPLATES, type ProtocolTemplateEntry } from "../../config/protocolTemplates";
 
 /** Safe template getter */
@@ -162,7 +162,8 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   const [audioLevel, setAudioLevel] = useState(0);
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [savedAudio, setSavedAudio] = useState<SavedSoroqAudio | null>(null);
+  const [viewMode, setViewMode] = useState<"RECORD" | "AUDIO_LIST">("RECORD");
+  const [audioList, setAudioList] = useState<SavedSoroqAudioItem[]>([]);
   const [transcriptText, setTranscriptText] = useState("");
 
   // --- REAL-TIME SPEECH-TO-TEXT (display only; does not affect recording or bayonnoma) ---
@@ -178,8 +179,11 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   const animationFrameRef = useRef<number | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recordingTimeRef = useRef(0);
+  const metadataRef = useRef(metadata);
   const speechRecognitionRef = useRef<InstanceType<Window["SpeechRecognition"]> | null>(null);
   const liveTranscriptEndRef = useRef<HTMLDivElement | null>(null);
+
+  metadataRef.current = metadata;
 
   const stopEverything = useCallback(() => {
     if (timerRef.current) {
@@ -220,25 +224,18 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
   }, [stopEverything]);
 
   useEffect(() => {
-    getSoroqAudio().then(setSavedAudio).catch(() => setSavedAudio(null));
-  }, []);
+    if (viewMode === "AUDIO_LIST") {
+      getSoroqAudioList().then(setAudioList).catch(() => setAudioList([]));
+    }
+  }, [viewMode]);
 
   useEffect(() => {
     liveTranscriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [liveTranscript, interimTranscript]);
 
-  const loadSavedAudio = useCallback(() => {
-    if (savedAudio) {
-      setAudioBlob(savedAudio.blob);
-      toast("Сақланган овоз юкланди. Баённома яратиш тугмасини босинг.", "success");
-    }
-  }, [savedAudio, toast]);
-
-  const removeSavedAudio = useCallback(async () => {
-    await clearSoroqAudio();
-    setSavedAudio(null);
-    toast("Сақланган овоз ўчирилди", "info");
-  }, [toast]);
+  const refreshAudioList = useCallback(() => {
+    getSoroqAudioList().then(setAudioList).catch(() => setAudioList([]));
+  }, []);
 
   const startRecording = useCallback(async () => {
     try {
@@ -285,7 +282,8 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         setAudioBlob(blob);
         audioChunksRef.current = [];
-        saveSoroqAudio(blob, mimeType, recordingTimeRef.current).catch(() => {});
+        const caseNum = metadataRef.current?.caseNumber ?? "";
+        saveSoroqAudio(blob, mimeType, recordingTimeRef.current, caseNum).catch(() => {});
       };
 
       recorder.start(1000); // Collect data every second
@@ -364,27 +362,20 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
     toast("Овоз юзиш тўхтатилди", "info");
   }, [stopEverything, toast]);
 
-  const processAndGenerate = useCallback(async () => {
-    if (!audioBlob) {
-      toast("Аввал овоз юзинг", "error");
-      return;
-    }
-
+  const processAndGenerateWithBlob = useCallback(async (audioBlobArg: Blob) => {
     setIsProcessing(true);
     setProcessingStatus("Овоз таҳлил қилинмоқда...");
 
     try {
-      // Convert blob to base64
-      const arrayBuffer = await audioBlob.arrayBuffer();
+      const arrayBuffer = await audioBlobArg.arrayBuffer();
       const base64 = btoa(
         new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
       );
 
-      // Transcribe audio
       setProcessingStatus("Матн ажратилмоқда...");
       const segments = await transcribeAudio(
         base64,
-        audioBlob.type || "audio/webm",
+        audioBlobArg.type || "audio/webm",
         "STENOGRAM",
         true,
         AppLanguage.UZ_CYRL
@@ -431,9 +422,8 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         getTemplateEntry(selectedTemplate)
       );
 
-      // Download
-      const blob = new Blob([htmlContent], { type: "application/msword" });
-      const url = URL.createObjectURL(blob);
+      const docBlob = new Blob([htmlContent], { type: "application/msword" });
+      const url = URL.createObjectURL(docBlob);
       const a = document.createElement("a");
       a.href = url;
       const templateTitle = getTemplateEntry(selectedTemplate).title;
@@ -450,7 +440,15 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
       setIsProcessing(false);
       setProcessingStatus("");
     }
-  }, [audioBlob, selectedTemplate, metadata, toast]);
+  }, [selectedTemplate, metadata, toast]);
+
+  const processAndGenerate = useCallback(async () => {
+    if (!audioBlob) {
+      toast("Аввал овоз юзинг", "error");
+      return;
+    }
+    await processAndGenerateWithBlob(audioBlob);
+  }, [audioBlob, processAndGenerateWithBlob, toast]);
 
   const clearRecording = useCallback(() => {
     setAudioBlob(null);
@@ -489,10 +487,26 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
               </div>
             </div>
           </div>
+          <div className="flex gap-2 ml-4">
+            <button
+              type="button"
+              onClick={() => setViewMode("RECORD")}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${viewMode === "RECORD" ? "bg-uzblue text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+            >
+              Жонли юзиш
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("AUDIO_LIST")}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${viewMode === "AUDIO_LIST" ? "bg-uzblue text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
+            >
+              Аудио ёзувлар
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-4">
-          {audioBlob && !isRecording && (
+          {viewMode === "RECORD" && audioBlob && !isRecording && (
             <button
               type="button"
               onClick={clearRecording}
@@ -502,6 +516,7 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
               Тозалаш
             </button>
           )}
+          {viewMode === "RECORD" && (
           <button
             type="button"
             onClick={processAndGenerate}
@@ -511,9 +526,64 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
             {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
             {isProcessing ? processingStatus || "ТАҲЛИЛ..." : "БАЁННОМА ЯРАТИШ"}
           </button>
+          )}
         </div>
       </div>
 
+      {viewMode === "AUDIO_LIST" ? (
+        <div className="flex-1 flex flex-col overflow-hidden bg-white p-6">
+          <h3 className="text-sm font-black text-slate-700 uppercase tracking-widest mb-4 flex items-center gap-2">
+            <Radio size={18} /> Ижро иши рақами бўйича аудио ёзувлар
+          </h3>
+          <div className="flex-1 overflow-auto rounded-xl border border-slate-200">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Ижро иши рақами</th>
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Сана</th>
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest">Давомийлиги</th>
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest w-28">Эшитиш</th>
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest w-48">Баённома яратиш</th>
+                  <th className="px-4 py-3 text-[10px] font-black text-slate-500 uppercase tracking-widest w-20"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {audioList.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-slate-400 text-sm">
+                      Сақланган аудио ёзувлар йўқ. Жонли юзиш орқали сўроқ юзинг.
+                    </td>
+                  </tr>
+                )}
+                {audioList.map((item) => (
+                  <AudioListRow
+                    key={item.id}
+                    item={item}
+                    isProcessing={isProcessing}
+                    onPlay={async () => {
+                      const full = await getSoroqAudioById(item.id);
+                      if (!full?.blob) return;
+                      const url = URL.createObjectURL(full.blob);
+                      const audio = new Audio(url);
+                      audio.onended = () => URL.revokeObjectURL(url);
+                      audio.play().catch(() => {});
+                    }}
+                    onGenerate={async () => {
+                      const full = await getSoroqAudioById(item.id);
+                      if (full?.blob) await processAndGenerateWithBlob(full.blob);
+                    }}
+                    onDelete={async () => {
+                      await deleteSoroqAudio(item.id);
+                      refreshAudioList();
+                      toast("Ўчирилди", "info");
+                    }}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
       <div className="flex-1 flex overflow-hidden relative">
         {/* LEFT: SETTINGS PANEL */}
         <div className="w-[380px] bg-white border-r border-slate-200 flex flex-col z-20 shadow-xl shadow-slate-200/50">
@@ -581,21 +651,6 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
         {/* CENTER: RECORDING AREA */}
         <div className="flex-1 flex flex-col bg-gradient-to-br from-slate-50 to-slate-100 relative">
           <div className="flex-1 flex flex-col items-center justify-center p-10">
-            {savedAudio && !audioBlob && !isRecording && (
-              <div className="w-full max-w-2xl mb-4 p-4 rounded-xl border border-blue-200 bg-blue-50/80 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm font-bold text-slate-800">
-                  Сақланган сўроқ овози мавжуд. Баённома яратишда хатолик бўлса, шу овоздан қайта урининг.
-                </p>
-                <div className="flex gap-2">
-                  <button type="button" onClick={loadSavedAudio} className="px-4 py-2 bg-uzblue text-white rounded-lg text-xs font-bold hover:bg-blue-600">
-                    Ишлатиш
-                  </button>
-                  <button type="button" onClick={removeSavedAudio} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-300">
-                    Ўчириш
-                  </button>
-                </div>
-              </div>
-            )}
             {/* Real-time speech-to-text (display only; does not affect recording or bayonnoma) */}
             <div className="w-full max-w-2xl mb-6">
               <div className="rounded-2xl border border-slate-200 bg-white/95 shadow-lg shadow-slate-200/50 overflow-hidden">
@@ -764,8 +819,61 @@ const SmartProtocol: React.FC<SmartProtocolProps> = ({ onBack }) => {
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };
+
+/** Table row for one saved audio: case number, date, duration, play, generate, delete. */
+function AudioListRow({
+  item,
+  isProcessing,
+  onPlay,
+  onGenerate,
+  onDelete,
+}: {
+  key?: React.Key;
+  item: SavedSoroqAudioItem;
+  isProcessing: boolean;
+  onPlay: () => void | Promise<void>;
+  onGenerate: () => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
+}) {
+  const dateStr = new Date(item.recordedAt).toLocaleString("uz-Cyrl", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const durationStr = `${Math.floor(item.durationSeconds / 60)}:${(item.durationSeconds % 60).toString().padStart(2, "0")}`;
+  return (
+    <tr className="border-b border-slate-100 hover:bg-slate-50/50">
+      <td className="px-4 py-3 text-xs font-bold text-slate-800">{item.caseNumber}</td>
+      <td className="px-4 py-3 text-xs text-slate-600">{dateStr}</td>
+      <td className="px-4 py-3 text-xs text-slate-600 font-mono">{durationStr}</td>
+      <td className="px-4 py-3">
+        <button type="button" onClick={onPlay} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600" title="Эшитиш">
+          <Play size={16} />
+        </button>
+      </td>
+      <td className="px-4 py-3">
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={isProcessing}
+          className="px-3 py-1.5 rounded-lg bg-uzblue text-white text-xs font-bold hover:bg-blue-600 disabled:opacity-50 flex items-center gap-1"
+        >
+          Баённома яратиш
+        </button>
+      </td>
+      <td className="px-4 py-3">
+        <button type="button" onClick={onDelete} className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50" title="Ўчириш">
+          <Trash2 size={14} />
+        </button>
+      </td>
+    </tr>
+  );
+}
 
 export default SmartProtocol;
