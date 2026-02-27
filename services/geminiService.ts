@@ -849,13 +849,14 @@ async function openRouterImage(prompt: string, preferredModel?: string): Promise
 export async function generatePhotorobotVariants(
   prompt: string,
   count: number,
-  _type: "HUMAN" | "OBJECT",
+  type: "HUMAN" | "OBJECT",
   _userApiKey?: string,
 ): Promise<string[]> {
   const actualCount = Math.max(1, Math.min(count, 5));
   const fullPrompt =
-    `Forensic identification portrait, photorealistic: ${prompt}. ` +
-    `Sharp facial details, neutral solid white background, professional studio lighting, high quality, realistic face.`;
+    type === "OBJECT"
+      ? `${prompt} CRITICAL: Generate ONLY the single object described above. Do NOT add any vehicle, car, person, animal, or scene. No knife in car, no object stuck in anything. Just the one item alone on pure white background (#FFFFFF). Professional product photography, 8k, photorealistic.`
+      : `Forensic identification portrait, photorealistic: ${prompt}. Sharp facial details, neutral solid white background, professional studio lighting, high quality, realistic face.`;
 
   // 5 parallel calls: round-robin over photorobot models so we get 5 variants (same model can serve multiple)
   const plannedModels = Array.from(
@@ -891,26 +892,28 @@ export async function generatePhotorobotVariants(
 
 /**
  * Edits a photorobot image: uses vision LLM to describe the current image,
- * merges edit instructions, then re-generates via Pollinations.ai.
+ * merges edit instructions, then re-generates. For OBJECT type avoids portrait wording.
  */
 export async function editPhotorobotImage(
   imageUrl: string,
   editInstruction: string,
   userApiKey?: string,
+  type: "HUMAN" | "OBJECT" = "HUMAN",
 ): Promise<string> {
   const client = getTextClient(userApiKey);
 
-  // Use vision to get a detailed description of the current portrait
+  const isObject = type === "OBJECT";
+  const visionPrompt = isObject
+    ? `Describe the single object in this product photo in detail (shape, color, material, condition). Then apply this change: "${editInstruction}". Return ONLY JSON: {"fullDescription":"updated object description in English for image generation"}`
+    : `Ушбу фоторобот портретидаги шахснинг ташқи қиёфасини батафсил тавсифланг (йуз шакли, тери ранги, кўзлар, бурун, соч, соқол, кийим ва ҳ..). Кейин ушбу ўзгаришни киритинг: "${editInstruction}". ФАҚАТ JSON қайтаринг: {"fullDescription":"янгиланган портрет тавсифи (инглиз тилида расм генератсияси учун)"}`;
+
   const descResponse = await client.chat.completions.create({
     model: TEXT_MODEL,
     messages: uzMessages([{
       role: "user",
       content: [
         { type: "image_url", image_url: { url: imageUrl } },
-        {
-          type: "text",
-          text: `Ушбу фоторобот портретидаги шахснинг ташқи қиёфасини батафсил тавсифланг (йуз шакли, тери ранги, кўзлар, бурун, соч, соқол, кийим ва ҳ..). Кейин ушбу ўзгаришни киритинг: "${editInstruction}". ФАҚАТ JSON қайтаринг: {"fullDescription":"янгиланган портрет тавсифи (инглиз тилида расм генератсияси учун)"}`,
-        },
+        { type: "text", text: visionPrompt },
       ],
     }]),
     response_format: { type: "json_object" },
@@ -921,8 +924,9 @@ export async function editPhotorobotImage(
   );
   const finalPrompt = desc.fullDescription || editInstruction;
 
-  const editFullPrompt =
-    `Forensic identification portrait: ${finalPrompt}. Realistic, neutral white background, photorealistic, sharp details.`;
+  const editFullPrompt = isObject
+    ? `${finalPrompt} Single object only, no vehicle, no person, pure white background. 8k product photo, photorealistic.`
+    : `Forensic identification portrait: ${finalPrompt}. Realistic, neutral white background, photorealistic, sharp details.`;
 
   return openRouterImage(editFullPrompt);
 }

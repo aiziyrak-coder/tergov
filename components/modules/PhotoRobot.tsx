@@ -69,7 +69,7 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
 
   // --- EXPANDED OBJECT STATE ---
   const [objectFeatures, setObjectFeatures] = useState({ 
-    category: 'Автомобил', 
+    category: 'Avtomobil', 
     // Car specifics
     carType: 'Sedan',
     brand: '', 
@@ -148,14 +148,19 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
     let prompt = "";
     
     if (inputMethod === 'NARRATIVE') {
-        prompt = `
+        prompt =
+          targetType === "OBJECT"
+            ? `
+        SINGLE OBJECT ONLY — studio product photo. Description: ${narrativeText}.
+        MANDATORY: Draw ONLY the object described. No vehicle, no car, no person, no hands, no scene (e.g. no knife in car). One item alone on pure white background. 8k, photorealistic, no text.
+        `
+            : `
         CRITICAL: GENERATE A SINGLE ISOLATED SUBJECT.
-        Task: Create a hyper-realistic ${targetType === 'HUMAN' ? 'biometric identification photo' : 'studio product photo'}.
-        Description: ${narrativeText}. 
-        
+        Task: Create a hyper-realistic biometric identification photo.
+        Description: ${narrativeText}.
         MANDATORY RULES:
-        1. ONE SINGLE PERSON/OBJECT ONLY. No groups, no crowds, no secondary figures.
-        2. NO TEXT, NO LABELS, NO WATERMARKS. 
+        1. ONE SINGLE PERSON ONLY. No groups, no crowds, no secondary figures.
+        2. NO TEXT, NO LABELS, NO WATERMARKS.
         3. PURE WHITE BACKGROUND (#FFFFFF).
         4. Camera: Front-facing, centered, 85mm lens portrait.
         5. Quality: 8k resolution, raw photography, sharp focus.
@@ -185,24 +190,37 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
         5. STYLE: Hyper-realistic 8k raw photo, sharp facial details, neutral lighting.
         `;
       } else {
-        // Object Prompt - STUDIO ISOLATION
-        prompt = `
-        PROFESSIONAL STUDIO PRODUCT PHOTOGRAPHY of ONE SINGLE OBJECT.
-        
-        OBJECT DETAILS:
-        - Item: ${objectFeatures.category}
-        - Type: ${objectFeatures.carType || objectFeatures.buildingType || 'Standard'}
-        - Brand/Model: ${objectFeatures.brand}
-        - Color: ${objectFeatures.color}
-        - Condition: ${objectFeatures.marks}
-        - Details: ${objectFeatures.windows || ''} ${objectFeatures.rims || ''} ${objectFeatures.roofType || ''}.
+        const isCar = objectFeatures.category === "Автомобил" || objectFeatures.category === "Avtomobil";
+        const isBuilding = objectFeatures.category === "Бино / Иншоот" || objectFeatures.category === "Bino / Inshoot";
+        const isGenericObject = !isCar && !isBuilding;
 
-        STRICT COMPOSITION RULES:
-        1. QUANTITY: EXACTLY ONE OBJECT.
-        2. BACKGROUND: SOLID PURE WHITE BACKGROUND (0xFFFFFF).
-        3. NO TEXT: No labels, logos, or overlay text.
-        4. STYLE: 8k resolution, commercial lighting, photorealistic.
+        if (isGenericObject) {
+          // Pichoq, telefon va boshqa bitta predmet — faqat o‘sha narsa, hech qanday mashina/ sahna yo‘q
+          prompt = `
+        ONE SINGLE OBJECT — professional product photo.
+        Subject: ${objectFeatures.category}. Color: ${objectFeatures.color}. Material: ${objectFeatures.material}.
+        ${objectFeatures.marks ? `Details/Marks: ${objectFeatures.marks}.` : ""}
+
+        MANDATORY: Draw ONLY this object. No car, no vehicle, no person, no hands, no background scene. Object must be alone, centered, on pure white background. No other items.
+        Style: 8k, photorealistic, studio lighting, no text or logos.
         `;
+        } else if (isCar) {
+          prompt = `
+        ONE SINGLE OBJECT — car/vehicle only. No people, no other objects.
+        Car: ${objectFeatures.carType}. Color: ${objectFeatures.color}. ${objectFeatures.brand ? `Brand/Model: ${objectFeatures.brand}.` : ""}
+        ${objectFeatures.windows ? `Windows: ${objectFeatures.windows}.` : ""} ${objectFeatures.rims ? `Rims: ${objectFeatures.rims}.` : ""}
+        ${objectFeatures.marks ? `Condition/Marks: ${objectFeatures.marks}.` : ""}
+        Pure white background. Exactly one vehicle. 8k, photorealistic.
+        `;
+        } else {
+          prompt = `
+        ONE SINGLE SUBJECT — building/structure only.
+        Type: ${objectFeatures.buildingType}. ${objectFeatures.floors ? `Floors: ${objectFeatures.floors}.` : ""}
+        Material: ${objectFeatures.wallMaterial}. ${objectFeatures.roofType ? `Roof: ${objectFeatures.roofType}.` : ""}
+        ${objectFeatures.marks ? `Details: ${objectFeatures.marks}.` : ""}
+        Pure white or neutral background. Only this structure. 8k, photorealistic.
+        `;
+        }
       }
     }
 
@@ -245,7 +263,7 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
       4. NO TEXT.
       `;
       
-      const newImg = await editPhotorobotImage(currentImg, realisticEditPrompt);
+      const newImg = await editPhotorobotImage(currentImg, realisticEditPrompt, undefined, targetType);
       
       const newHistory = history.slice(0, historyIndex + 1);
       newHistory.push(newImg);
@@ -438,7 +456,7 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
                                  <option>Qurol / Pichoq</option>
                                </select></div>
 
-                               {objectFeatures.category === 'Автомобил' && (
+                               {(objectFeatures.category === 'Автомобил' || objectFeatures.category === 'Avtomobil') && (
                                  <div className="space-y-3 animate-in fade-in slide-in-from-top-1 bg-slate-50 p-4 rounded-xl border border-slate-200">
                                    <h4 className="text-xs font-black text-slate-400 uppercase mb-2">Автомобил Тафсилотлари</h4>
                                    <div className="grid grid-cols-2 gap-3">
@@ -462,7 +480,7 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
                                  </div>
                                )}
 
-                               {objectFeatures.category === 'Бино / Иншоот' && (
+                               {(objectFeatures.category === 'Бино / Иншоот' || objectFeatures.category === 'Bino / Inshoot') && (
                                  <div className="space-y-3 animate-in fade-in slide-in-from-top-1 bg-slate-50 p-4 rounded-xl border border-slate-200">
                                    <h4 className="text-xs font-black text-slate-400 uppercase mb-2">Бино Тафсилотлари</h4>
                                    <div><label className="text-[9px] font-bold text-slate-500 block mb-1">Бино Тури</label>
@@ -563,7 +581,7 @@ const PhotoRobot: React.FC<PhotoRobotProps> = ({ onBack }) => {
               {step === 'INPUT' && !loading && (
                 <div className="text-center opacity-20 group">
                     <div className="w-48 h-48 bg-white rounded-full flex items-center justify-center mx-auto mb-8 shadow-xl border-4 border-slate-200 group-hover:scale-110 transition-transform">
-                        {targetType === 'HUMAN' ? <ScanFace size={80} /> : (objectFeatures.category === 'Бино / Иншоот' ? <Building2 size={80}/> : (objectFeatures.category === 'Автомобил' ? <Car size={80}/> : <Box size={80}/>))}
+                        {targetType === 'HUMAN' ? <ScanFace size={80} /> : (objectFeatures.category === 'Bino / Inshoot' || objectFeatures.category === 'Бино / Иншоот' ? <Building2 size={80}/> : (objectFeatures.category === 'Avtomobil' || objectFeatures.category === 'Автомобил' ? <Car size={80}/> : <Box size={80}/>))}
                     </div>
                     <h2 className="text-3xl font-black uppercase tracking-tighter">Маълумотлар кутилмоқда</h2>
                     <p className="text-lg font-medium mt-2">Чап томондан параметрларни тўлдиринг</p>
